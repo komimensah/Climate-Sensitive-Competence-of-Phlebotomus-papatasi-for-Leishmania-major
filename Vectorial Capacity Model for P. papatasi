@@ -1,0 +1,71 @@
+# ============================================
+# Vectorial Capacity Model for P. papatasi (L. major)
+# Author: komi | Date: [2025-07-10]
+# ============================================
+
+# === Housekeeping ===
+rm(list = ls())   # Clear workspace
+gc()              # Garbage collection
+
+# === Load Required Libraries ===
+library(ggplot2)
+library(terra)
+library(viridis)
+
+# === 1. Fixed Parameter ===
+a <- 0.2  # Daily biting rate (constant)
+
+# === 2. EIP Function (Exponential decay) ===
+EIP_fun <- function(T) {
+  27.8474 * exp(-0.05901 * T)
+}
+
+# === 3. Mortality Rate Function (Parabolic fit) ===
+mort_rate_adult <- function(T) {
+  base <- 0.0207        # Intercept from empirical fit
+  a <- 0.000603         # Curvature coefficient
+  rate <- base + a * (T - 26)^2
+  return(rate)
+}
+
+# === 4. Vectorial Capacity Function ===
+VC_fun <- function(T) {
+  mu <- mort_rate_adult(T)
+  p <- exp(-mu)         # Daily survival probability
+  p <- pmin(p, 0.99)    # Cap to avoid math overflow
+  n <- EIP_fun(T)
+  vc <- (a^2 * p^n) / (-log(p))
+  return(vc)
+}
+
+# === 5. Evaluate Across Temperature Range (Visualization) ===
+temps <- seq(15, 35, 0.1)
+vc_vals <- VC_fun(temps)
+df <- data.frame(Temperature = temps, VC = vc_vals)
+
+# === 6. Plot Vectorial Capacity Curve ===
+ggplot(df, aes(x = Temperature, y = VC)) +
+  geom_line(color = "navyblue", size = 1.2) +
+  labs(
+    title = "Temperature-Dependent Vectorial Capacity of P. papatasi for L. major",
+    x = "Temperature (\u00B0C)",
+    y = "Vectorial Capacity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.line = element_line(size = 1.1, color = "black"),
+    axis.ticks = element_line(size = 0.8, color = "black")
+  )
+
+# === 7. Apply VC Function to Raster ===
+temp_raster <- rast("temperature_clipped_2.45.tif")  # Replace with your actual raster path
+vc_raster <- app(temp_raster, VC_fun)                # Pixel-wise VC calculation
+
+# === 8. Rescale VC Raster to [0, 1] Range ===
+vc_scaled <- (vc_raster - minmax(vc_raster)[1]) / (minmax(vc_raster)[2] - minmax(vc_raster)[1])
+
+# === 9. Save the Raster ===
+writeRaster(vc_scaled, "vectorial_capacity_scaled_2.45.tif", overwrite = TRUE)
+
+# === 10. Visualize Raster ===
+plot(vc_scaled, main = "Scaled Vectorial Capacity (P. papatasi \u2013 L. major)", col = viridis(100))
