@@ -1,0 +1,97 @@
+library(terra)
+
+# === 1. Load all rasters from folder ===
+folder_path <- "/Users/kagboka/Desktop/Lesh0.0/key paper/"
+raster_files <- list.files(folder_path, pattern = "\\.tif$", full.names = TRUE)
+
+# Extract base names for labeling
+raster_names <- tools::file_path_sans_ext(basename(raster_files))
+
+# Load and stack rasters with names
+r_stack <- rast(raster_files)
+names(r_stack) <- raster_names  # Assign meaningful layer names
+
+# === 2. Load coordinate CSV ===
+coords_df <- read.csv("Final data revised_2.csv")  # Should include 'lon' and 'lat'
+
+# === 3. Create SpatVector in WGS84 (common GPS) ===
+points_vect <- vect(coords_df, geom = c("lon", "lat"), crs = "EPSG:4326")
+
+# === 4. Reproject to raster CRS
+points_vect_proj <- project(points_vect, crs(r_stack))
+
+# === 5. Extract raster values at point locations
+extracted_vals <- extract(r_stack, points_vect_proj)
+
+# === 6. Merge with original coordinates
+results <- cbind(coords_df, extracted_vals[,-1])  # Drop ID column
+
+# === 7. Export to CSV with meaningful layer names
+write.csv(results, "extracted_raster_values_named-KM.csv", row.names = FALSE)
+
+# === 6b. Evaluate how many extracted values exceed threshold per raster ===
+threshold <- 0.1
+
+# Count how many points exceed the threshold per layer
+above_thresh_count <- colSums(results[,-c(1:2)] > threshold, na.rm = TRUE)
+
+# Compute proportion (useful when comparing layers with different point availability)
+above_thresh_prop <- colMeans(results[,-c(1:2)] > threshold, na.rm = TRUE)
+
+# Display the summary
+summary_df <- data.frame(
+  Raster_Layer = names(results)[-c(1:2)],
+  Count_Above_Threshold = above_thresh_count,
+  Proportion_Above_Threshold = round(above_thresh_prop, 3)
+)
+
+print(summary_df)
+
+# === Composite Raster Calculations ===
+
+# Load your rasters (replace with your actual filenames)
+lambda_raster <- rast("lambda_epiprob_normalized.tif")
+vc_raster <- rast("vectorial_capacity_scaled.tif")
+
+# Ensure both rasters align
+vc_raster <- resample(vc_raster, lambda_raster, method = "bilinear")
+
+# 1. Geometric Mean
+gm_raster <- sqrt(lambda_raster * vc_raster)
+writeRaster(gm_raster, "composite_geometric.tif", overwrite = TRUE)
+
+# 2. Harmonic Mean
+hm_raster <- 2 * (lambda_raster * vc_raster) / (lambda_raster + vc_raster)
+writeRaster(hm_raster, "composite_harmonic.tif", overwrite = TRUE)
+
+# 3. Additive Means with different weights
+am_raster <- (0.10 * lambda_raster + 0.90 * vc_raster)
+writeRaster(am_raster, "composite_additive_10_90.tif", overwrite = TRUE)
+
+am_raster <- (0.20 * lambda_raster + 0.80 * vc_raster)
+writeRaster(am_raster, "composite_additive_20_80.tif", overwrite = TRUE)
+
+am_raster <- (0.30 * lambda_raster + 0.70 * vc_raster)
+writeRaster(am_raster, "composite_additive_30_70.tif", overwrite = TRUE)
+
+am_raster <- (0.40 * lambda_raster + 0.60 * vc_raster)
+writeRaster(am_raster, "composite_additive_40_60.tif", overwrite = TRUE)
+
+am_raster <- (0.50 * lambda_raster + 0.50 * vc_raster)
+writeRaster(am_raster, "composite_additive_50_50.tif", overwrite = TRUE)
+
+am_raster <- (0.60 * lambda_raster + 0.40 * vc_raster)
+writeRaster(am_raster, "composite_additive_60_40.tif", overwrite = TRUE)
+
+am_raster <- (0.70 * lambda_raster + 0.30 * vc_raster)
+writeRaster(am_raster, "composite_additive_70_30.tif", overwrite = TRUE)
+
+am_raster <- (0.80 * lambda_raster + 0.20 * vc_raster)
+writeRaster(am_raster, "composite_additive_80_20.tif", overwrite = TRUE)
+
+am_raster <- (0.90 * lambda_raster + 0.10 * vc_raster)
+writeRaster(am_raster, "composite_additive_90_10.tif", overwrite = TRUE)
+
+# 12. Multiplicative
+mul_raster <- lambda_raster * vc_raster
+writeRaster(mul_raster, "composite_multiplicative.tif", overwrite = TRUE)
