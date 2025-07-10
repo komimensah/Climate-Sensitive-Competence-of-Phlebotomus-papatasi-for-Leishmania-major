@@ -1,0 +1,110 @@
+# Climate Suitability Analysis and Healthcare Access — Cleaned R Script
+
+# Author: Komi Agboka
+# Description: This R script performs temperature-based suitability analysis under climate change, evaluates healthcare access proximity, and conducts visualization and statistical comparisons.
+
+# ============================== #
+#        Load Libraries         #
+# ============================== #
+library(terra)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(sf)
+library(MASS)
+
+# ============================== #
+# 1. Extract Raster Values at Locations #
+# ============================== #
+folder_path <- "/Users/kagboka/Desktop/Lesh0.0/key paper/"
+raster_files <- list.files(folder_path, pattern = "\\.tif$", full.names = TRUE)
+r_stack <- rast(raster_files)
+names(r_stack) <- tools::file_path_sans_ext(basename(raster_files))
+
+coords_df <- read.csv("Final data revised_2.csv")
+points_vect <- vect(coords_df, geom = c("lon", "lat"), crs = "EPSG:4326")
+points_vect_proj <- project(points_vect, crs(r_stack))
+
+extracted_vals <- extract(r_stack, points_vect_proj)
+results <- cbind(coords_df, extracted_vals[,-1])
+write.csv(results, "extracted_raster_values_named-KM.csv", row.names = FALSE)
+
+# ============================== #
+# 2. Violin + Boxplot + Wilcoxon Test #
+# ============================== #
+long <- results %>%
+  select(delta_SSP245, delta_SSP585) %>%
+  pivot_longer(cols = everything(), names_to = "Scenario", values_to = "Delta") %>%
+  mutate(Scenario = factor(case_when(
+    Scenario == "delta_SSP245" ~ "SSP2-4.5",
+    Scenario == "delta_SSP585" ~ "SSP5-8.5"
+  ), levels = c("SSP2-4.5", "SSP5-8.5")))
+
+p <- ggplot(long, aes(x = Scenario, y = Delta, fill = Scenario)) +
+  geom_violin(trim = FALSE, alpha = 0.5, color = NA) +
+  geom_boxplot(width = 0.1, fill = "white", color = "black", size = 0.8) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3.5, fill = "black") +
+  geom_jitter(width = 0.15, alpha = 0.3, size = 1.1, color = "grey30") +
+  scale_fill_manual(values = c("SSP2-4.5" = "#4C72B0", "SSP5-8.5" = "#C44E52")) +
+  labs(y = "\u0394 Suitability", x = NULL, fill = "Scenario") +
+  theme_pubr() +
+  theme(text = element_text(size = 14), legend.position = "top")
+
+ggsave("suitability_violin_boxplot.png", plot = p, width = 7.5, height = 5.5, dpi = 300)
+
+# Wilcoxon test
+paired_data <- na.omit(results[, c("delta_SSP245", "delta_SSP585")])
+wilcox_test <- wilcox.test(paired_data$delta_SSP585, paired_data$delta_SSP245, paired = TRUE)
+print(wilcox_test)
+
+# ============================== #
+# 3. Raster Agreement and Similarity #
+# ============================== #
+r1 <- rast("composite_additive_10_90_2.45.tif")
+r2 <- rast("composite_additive_10_90_5.85.tif")
+r2 <- resample(r2, r1)
+
+# Similarity metric
+epsilon <- 1e-6
+similarity <- app(c(r1, r2), fun = function(x) {
+  num <- abs(x[1] - x[2])
+  denom <- max(x[1], x[2], epsilon)
+  return(1 - (num / denom))
+})
+similarity <- clamp(similarity, lower = 0, upper = 1)
+writeRaster(similarity, "percent_similarity_map.tif", overwrite = TRUE)
+
+# ============================== #
+# 4. Suitability vs Healthcare Distance #
+# ============================== #
+suitability_rast <- rast("composite_additive_10_90.tif")
+healthcare_rast <- rast("distance_to_health.tif") / 1000  # convert to km
+healthcare_rast <- resample(healthcare_rast, suitability_rast)
+
+r_stack <- c(suitability_rast, healthcare_rast)
+names(r_stack) <- c("Suitability", "Healthcare")
+df <- as.data.frame(r_stack, xy = TRUE, na.rm = TRUE)
+
+# Sample
+set.seed(123)
+df_sample <- df[sample(nrow(df), min(10000, nrow(df))), ]
+r_val <- cor(df_sample$Suitability, df_sample$Healthcare, use = "complete.obs")
+
+p2 <- ggplot(df_sample, aes(x = Suitability, y = Healthcare)) +
+  geom_point(aes(color = "Suitability Points"), alpha = 0.3, size = 0.7) +
+  geom_smooth(aes(color = "Linear Trend"), method = "lm", se = FALSE, linewidth = 1.3) +
+  scale_color_manual(name = "Legend", values = c("Suitability Points" = "steelblue", "Linear Trend" = "darkred")) +
+  labs(title = "Suitability vs Health Care Access", subtitle = "Sample of 10,000 points",
+       x = "Suitability Index (\u03bb_max)", y = "Distance to Health Care (km)") +
+  annotate("text", x = Inf, y = Inf, hjust = 1.1, vjust = 1.3,
+           label = paste0("r = ", round(r_val, 3)), size = 5.2, color = "black") +
+  theme_minimal(base_size = 16) +
+  theme(legend.position = "bottom", legend.title = element_text(face = "bold"))
+
+ggsave("suitability_vs_healthcare.png", plot = p2, width = 8, height = 6, dpi = 600)
+
+# ============================== #
+# Save full results
+# ============================== #
+write.csv(results, "climate_change_analysis.csv", row.names = FALSE)
