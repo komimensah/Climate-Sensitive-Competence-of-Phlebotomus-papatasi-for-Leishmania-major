@@ -1,0 +1,100 @@
+# ================================
+# 1. Load Libraries and Data
+# ================================
+library(terra)
+library(ggplot2)
+
+# Clean environment
+rm(list = ls())
+gc()
+
+# ================================
+# 2. Define Trait-Based Functions
+# ================================
+
+# Fecundity - Logan Model
+logan_fecundity <- function(T, a = 0.378, b = 0.173, Tmax = 40.0, c = 2.97) {
+  F_T <- a * exp(b * T) - exp(b * Tmax - ((Tmax - T) / c))
+  F_T[T > Tmax | F_T < 0] <- 0
+  return(F_T)
+}
+
+# Development rates (1/duration)
+dev_rate_egg   <- function(T) { max(0, -0.0009*T^2 + 0.048*T - 0.345) }
+dev_rate_larva <- function(T) { max(0, -0.0007*T^2 + 0.039*T - 0.32) }
+dev_rate_pupa  <- function(T) { max(0, -0.0005*T^2 + 0.026*T - 0.2) }
+
+# Survival probabilities
+surv_rate_egg   <- function(T) { 1.01 * exp(-0.5 * ((T - 24.5) / 4.8)^2) }
+surv_rate_larva <- function(T) { 0.95 * exp(-0.5 * ((T - 27) / 3.5)^2) }
+surv_rate_pupa  <- function(T) { 0.93 * exp(-0.5 * ((T - 26.8) / 3.8)^2) }
+
+# Adult mortality rate
+mort_rate_adult <- function(T) {
+  base <- 0.0207
+  a <- 0.000603
+  rate <- base + a * (T - 26)^2
+  return(rate)
+}
+
+# ========================================
+# 3. Metzler Matrix and Suitability Function
+# ========================================
+
+compute_suitability <- function(T) {
+  if (is.na(T) || is.infinite(T) || T < 0 || T > 50) return(0)
+
+  time_step <- 6  # first gonotrophic cycle duration
+  F  <- logan_fecundity(T)
+  dE <- dev_rate_egg(T)
+  dL <- dev_rate_larva(T)
+  dP <- dev_rate_pupa(T)
+  sE <- surv_rate_egg(T)
+  sL <- surv_rate_larva(T)
+  sP <- surv_rate_pupa(T)
+  muA <- mort_rate_adult(T)
+
+  M <- matrix(c(
+    -dE,      0,       0,        F,
+    sE*dE,  -dL,      0,        0,
+    0,      sL*dL,   -dP,       0,
+    0,       0,      sP*dP,   -muA
+  ), nrow = 4, byrow = TRUE) * time_step
+
+  eigs <- eigen(M)$values
+  lambda_max <- max(0, Re(eigs[which.max(Re(eigs))]))
+  return(lambda_max)
+}
+
+# Vectorize for raster use
+compute_suitability_vec <- Vectorize(compute_suitability)
+
+# ================================
+# 4. Load and Prepare Raster
+# ================================
+
+# Load temperature raster
+temp_rast <- rast("temperature_clipped_2.45.tif")  # Replace with your file
+
+# Set NA to 0 or some low temp to avoid error (optional)
+temp_rast[is.na(temp_rast)] <- 0
+
+# ================================
+# 5. Rasterized Suitability
+# ================================
+
+lambda_raster <- app(temp_rast, fun = compute_suitability_vec)
+
+# Normalize using epidemic probability
+epi_prob <- function(x) {
+  ifelse(x <= 1, 0, 1 - 1 / x)
+}
+
+lambda_norm_raster <- app(lambda_raster, fun = epi_prob)
+
+# ================================
+# 6. Save and Plot Output
+# ================================
+
+writeRaster(lambda_norm_raster, "lambda_epiprob_normalized_2.45.tif", overwrite = TRUE)
+plot(lambda_norm_raster, main = "Normalized Epidemic Probability (\u03bb\u2098\u2090\u2093)")
